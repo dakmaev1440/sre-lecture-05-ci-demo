@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run unit tests
+        run: go test ./...
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        run: go build ./...
+
+      - name: Build container image
+        run: docker build --tag ci-starter:${{ github.sha }} .
+
+  container-smoke:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build container image
+        run: docker build --tag ci-starter:${{ github.sha }} .
+
+      - name: Start application container
+        run: docker run --detach --rm --name ci-starter --publish 8080:8080 --env APP_VERSION=ci-${{ github.sha }} ci-starter:${{ github.sha }}
+
+      - name: Check health and version endpoints
+        run: |
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://localhost:8080/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://localhost:8080/health | grep -F '"status":"ok"'
+          curl --fail --silent http://localhost:8080/version | grep -F '"version":"ci-${{ github.sha }}"'
+
+      - name: Stop application container
+        if: always()
+        run: docker stop ci-starter || true
